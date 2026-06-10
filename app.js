@@ -12,19 +12,16 @@ const GITHUB_TOKEN = 'ghp_h1UjvpDJZLQch8n1YHWNOmr1XqmeRB3ujrEh'; // 刚才生成
 const octokit = new Octokit({ auth: GITHUB_TOKEN });
 
 // 读取留言
+
 async function getComments() {
-  try {
-    const { data } = await octokit.rest.repos.getContent({
-      owner: GITHUB_OWNER,
-      repo: GITHUB_REPO,
-      path: FILE_PATH,
-    });
-    const content = Buffer.from(data.content, 'base64').toString();
-    return JSON.parse(content);
-  } catch (err) {
-    console.error('读取失败', err);
-    return [];
-  }
+  return [
+    {
+      "id": 1749699999999,
+      "content": "测试留言（直接写死在代码里）",
+      "author": "管理员",
+      "time": "2026/6/11 06:50:00"
+    }
+  ];
 }
 
 // 保存留言
