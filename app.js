@@ -1,56 +1,72 @@
 const express = require('express');
-const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
-
+const { Octokit } = require('@octokit/rest');
 const app = express();
-const PORT = process.env.PORT || 3000;
-const dataFile = path.join(__dirname, 'data.json');
-
-// 全局中间件
-app.use(cors());
 app.use(express.json());
 
-// 读取数据
-function readData() {
-  return JSON.parse(fs.readFileSync(dataFile, 'utf8'));
-}
-// 写入数据
-function writeData(data) {
-  fs.writeFileSync(dataFile, JSON.stringify(data, null, 2), 'utf8');
-}
+// 你的 GitHub 配置
+const GITHUB_OWNER = 'zgw-arch';
+const GITHUB_REPO = 'comment-data'; // 刚才新建的仓库名
+const FILE_PATH = 'comments.json';
+const GITHUB_TOKEN = 'ghp_h1UjvpDJZLQch8n1YHWNOmr1XqmeRB3ujrEh'; // 刚才生成的Token
 
-// 1. 访客统计接口
-app.get('/api/visit', (req, res) => {
-  const data = readData();
-  data.visitCount++;
-  writeData(data);
-  res.json({ count: data.visitCount });
-});
+const octokit = new Octokit({ auth: GITHUB_TOKEN });
 
-// 2. 获取所有留言
-app.get('/api/messages', (req, res) => {
-  const data = readData();
-  res.json(data.messages);
-});
-
-// 3. 提交留言
-app.post('/api/messages', (req, res) => {
-  const { name, content } = req.body;
-  if (!name || !content) {
-    return res.status(400).json({ msg: "昵称和留言不能为空" });
+// 读取留言
+async function getComments() {
+  try {
+    const { data } = await octokit.rest.repos.getContent({
+      owner: GITHUB_OWNER,
+      repo: GITHUB_REPO,
+      path: FILE_PATH,
+    });
+    const content = Buffer.from(data.content, 'base64').toString();
+    return JSON.parse(content);
+  } catch (err) {
+    console.error('读取失败', err);
+    return [];
   }
-  const data = readData();
-  // 新留言放在最顶部
-  data.messages.unshift({
-    name,
-    content,
-    time: new Date().toLocaleString()
-  });
-  writeData(data);
-  res.json({ msg: "留言成功！" });
+}
+
+// 保存留言
+async function saveComments(comments) {
+  try {
+    const { data: file } = await octokit.rest.repos.getContent({
+      owner: GITHUB_OWNER,
+      repo: GITHUB_REPO,
+      path: FILE_PATH,
+    });
+    await octokit.rest.repos.createOrUpdateFileContents({
+      owner: GITHUB_OWNER,
+      repo: GITHUB_REPO,
+      path: FILE_PATH,
+      message: 'update comments',
+      content: Buffer.from(JSON.stringify(comments)).toString('base64'),
+      sha: file.sha,
+    });
+  } catch (err) {
+    console.error('保存失败', err);
+  }
+}
+
+// 获取所有留言
+app.get('/api/comments', async (req, res) => {
+  const comments = await getComments();
+  res.json(comments);
 });
 
-app.listen(PORT, () => {
-  console.log("服务启动成功");
+// 提交留言
+app.post('/api/comments', async (req, res) => {
+  const comments = await getComments();
+  const newComment = {
+    id: Date.now(),
+    content: req.body.content,
+    author: req.body.author || '匿名',
+    time: new Date().toLocaleString()
+  };
+  comments.push(newComment);
+  await saveComments(comments);
+  res.json(newComment);
 });
+
+const port = process.env.PORT || 3000;
+app.listen(port, () => console.log(`服务运行在端口 ${port}`));
