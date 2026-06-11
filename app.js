@@ -1,68 +1,104 @@
 const express = require('express');
+const cors = require('cors');
 const { Octokit } = require('@octokit/rest');
 const app = express();
+
+app.use(cors());
 app.use(express.json());
 
-// 你的 GitHub 配置
+// ========== 配置（Token 请用环境变量！）==========
 const GITHUB_OWNER = 'zgw-arch';
-const GITHUB_REPO = 'comment-data'; // 刚才新建的仓库名
+const GITHUB_REPO = 'comment-data';
 const FILE_PATH = 'comments.json';
-const GITHUB_TOKEN = 'ghp_h1UjvpDJZLQch8n1YHWNOmr1XqmeRB3ujrEh'; // 刚才生成的Token
+// ⚠️ 生产环境必须用环境变量：process.env.GITHUB_TOKEN
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '你的Token';
 
 const octokit = new Octokit({ auth: GITHUB_TOKEN });
 
-// 读取留言
-
-async function getComments() {
-  return [
-    {
-      "id": 1749699999999,
-      "content": "测试留言（直接写死在代码里）",
-      "author": "管理员",
-      "time": "2026/6/11 06:50:00"
-    }
-  ];
-}
-
-// 保存留言
-async function saveComments(comments) {
+// ========== 辅助函数：从 GitHub 读取文件 ==========
+async function getFileContent() {
   try {
-    const { data: file } = await octokit.rest.repos.getContent({
+    const { data } = await octokit.rest.repos.getContent({
       owner: GITHUB_OWNER,
       repo: GITHUB_REPO,
       path: FILE_PATH,
     });
-    await octokit.rest.repos.createOrUpdateFileContents({
-      owner: GITHUB_OWNER,
-      repo: GITHUB_REPO,
-      path: FILE_PATH,
-      message: 'update comments',
-      content: Buffer.from(JSON.stringify(comments)).toString('base64'),
-      sha: file.sha,
-    });
+    const content = Buffer.from(data.content, 'base64').toString('utf8');
+    return { content: JSON.parse(content), sha: data.sha };
   } catch (err) {
-    console.error('保存失败', err);
+    // 文件不存在时创建空数据
+    if (err.status === 404) {
+      return { content: { messages: [], visitCount: 0 }, sha: null };
+    }
+    throw err;
   }
 }
 
-// 获取所有留言
-app.get('/api/comments', async (req, res) => {
-  const comments = await getComments();
-  res.json(comments);
+// ========== 辅助函数：保存到 GitHub ==========
+async function saveFileContent(data, sha) {
+  const content = Buffer.from(JSON.stringify(data, null, 2)).toString('base64');
+  const params = {
+    owner: GITHUB_OWNER,
+    repo: GITHUB_REPO,
+    path: FILE_PATH,
+    message: 'update data',
+    content: content,
+  };
+  if (sha) params.sha = sha;
+  
+  await octokit.rest.repos.createOrUpdateFileContents(params);
+}
+
+// ========== 1. 访客统计 API ==========
+app.get('/api/visit', async (req, res) => {
+  try {
+    const { content, sha } = await getFileContent();
+    content.visitCount = (content.visitCount || 0) + 1;
+    await saveFileContent(content, sha);
+    res.json({ count: content.visitCount });
+  } catch (err) {
+    console.error('访客统计失败:', err);
+    res.status(500).json({ error: '统计失败' });
+  }
 });
 
-// 提交留言
-app.post('/api/comments', async (req, res) => {
-  const comments = await getComments();
-  const newComment = {
-    id: Date.now(),
-    content: req.body.content,
-    author: req.body.author || '匿名',
-    time: new Date().toLocaleString()
-  };
-  comments.push(newComment);
-  await saveComments(comments);
-  res.json(newComment);
+// ========== 2. 获取留言 ==========
+app.get('/api/messages', async (req, res) => {
+  try {
+    const { content } = await getFileContent();
+    res.json(content.messages || []);
+  } catch (err) {
+    console.error('获取留言失败:', err);
+    res.status(500).json({ error: '获取失败' });
+  }
+});
+
+// ========== 3. 提交留言 ==========
+app.post('/api/messages', async (req, res) => {
+  try {
+    const { name, content: msgContent } = req.body;
+    if (!name || !msgContent) {
+      return res.status(400).json({ msg: '昵称和留言不能为空' });
+    }
+
+    const { content, sha } = await getFileContent();
+    const messages = content.messages || [];
+    
+    messages.unshift({
+      id: Date.now(),
+      name: name.trim(),
+      content: msgContent.trim(),
+      time: new Date().toLocaleString('zh-CN')
+    });
+
+    content.messages = messages;
+    await saveFileContent(content, sha);
+    
+    res.json({ msg: '留言成功' });
+  } catch (err) {
+    console.error('提交留言失败:', err);
+    res.status(500).json({ msg: '提交失败' });
+  }
 });
 
 const port = process.env.PORT || 3000;
